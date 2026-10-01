@@ -1,0 +1,155 @@
+---
+title: "proteomic_timepoint_analysis"
+author: "C. Benitez"
+date: "2026-03-10"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+data <- read.csv("IsogenicFC_byTimePoint_20241016.csv")
+
+# Keep only rows with log2FC values
+data_clean <- data %>%
+  filter(!is.na(FoldChange_het_WT))
+```
+
+```{r}
+#adjust to add 2,4, and 6 month columns 
+data_wide <- data_clean %>%
+  select(Protein, geneSym, TimePoint, FoldChange_het_WT) %>%
+  pivot_wider(names_from = TimePoint,
+              values_from = FoldChange_het_WT)
+
+
+```
+
+```{r}
+#scatter plot of 4 and 6 months
+fc_cutoff <- log2(1.5)
+
+ggplot(data_wide, aes(x = Month_4, y = Month_6)) +
+  geom_point(color = "black", alpha = 0.4, size = 2) +
+  
+  # 1.5 FC threshold lines
+  geom_vline(xintercept = c(-fc_cutoff, fc_cutoff),
+             linetype = "dashed", linewidth = 0.6) +
+  geom_hline(yintercept = c(-fc_cutoff, fc_cutoff),
+             linetype = "dashed", linewidth = 0.6) +
+  
+  theme_minimal(base_size = 14) +
+  labs(title = "4 vs 6 Month log2 Fold Change",
+       x = "Month 4 log2FC",
+       y = "Month 6 log2FC")
+```
+
+```{r}
+#Scatter plot
+ggplot(data_wide, aes(x = Month_4, y = Month_6)) +
+  geom_point(alpha = 0.3, size = 1.5) +
+  stat_density_2d(color = "blue") +
+  geom_vline(xintercept = c(-fc_cutoff, fc_cutoff),
+             linetype = "dashed") +
+  geom_hline(yintercept = c(-fc_cutoff, fc_cutoff),
+             linetype = "dashed") +
+  theme_minimal()
+```
+```{r}
+# Concordance Correlation Coefficient function (no external packages)
+ccc_base <- function(x, y, boot = FALSE, nboot = 2000, seed = 123) {
+  # remove NA pairs
+  ok <- !is.na(x) & !is.na(y)
+  x <- x[ok]; y <- y[ok]
+  n <- length(x)
+  if(n < 2) return(NA)
+
+  mu_x <- mean(x); mu_y <- mean(y)
+  s2_x <- var(x); s2_y <- var(y)
+  cov_xy <- cov(x, y)
+  # CCC formula: 2*cov / (var_x + var_y + (mean_x - mean_y)^2)
+  ccc_val <- 2 * cov_xy / (s2_x + s2_y + (mu_x - mu_y)^2)
+
+  res <- list(ccc = ccc_val, n = n)
+
+  if (boot) {
+    set.seed(seed)
+    bres <- replicate(nboot, {
+      idx <- sample(seq_len(n), replace = TRUE)
+      xs <- x[idx]; ys <- y[idx]
+      mu_xs <- mean(xs); mu_ys <- mean(ys)
+      s2_xs <- var(xs); s2_ys <- var(ys)
+      cov_xys <- cov(xs, ys)
+      2 * cov_xys / (s2_xs + s2_ys + (mu_xs - mu_ys)^2)
+    })
+    ci <- quantile(bres, c(0.025, 0.975), na.rm = TRUE)
+    res$boot <- bres
+    res$ci <- ci
+  }
+  return(res)
+}
+```
+
+```{r}
+x <- data_wide$Month_4
+y <- data_wide$Month_6
+
+ccc_res <- ccc_base(x, y, boot = TRUE, nboot = 1000)  # bootstrap optional
+ccc_res$ccc
+ccc_res$ci
+```
+
+```{r}
+library(ggplot2)
+
+# compute stats
+x <- data_wide$Month_4
+y <- data_wide$Month_6
+
+pearson_test <- cor.test(x, y, method = "pearson", use = "complete.obs")
+pearson_r <- pearson_test$estimate
+pearson_p <- pearson_test$p.value
+
+lm_mod <- lm(y ~ x)
+rsq <- summary(lm_mod)$r.squared
+
+ccc_res <- ccc_base(x, y, boot = FALSE)
+ccc_val <- ccc_res$ccc
+
+# build annotation text
+anno_text <- paste0("Pearson r = ", round(pearson_r, 2),
+                    " (p = ", signif(pearson_p, 2), ")\n",
+                    "R² = ", round(rsq, 2), "\n",
+                    "CCC = ", round(ccc_val, 2),
+                    "\nn = ", ccc_res$n)
+
+# plot
+fc_cutoff <- log2(1.5)
+p1<- ggplot(data_wide, aes(x = Month_4, y = Month_6)) +
+  geom_point(alpha = 0.4, size = 1.8, color = "black") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "darkgrey") +
+  geom_smooth(method = "lm", se = FALSE, color = "blue", linewidth = 0.6) +
+  geom_vline(xintercept = c(-fc_cutoff, fc_cutoff), linetype = "dashed") +
+  geom_hline(yintercept = c(-fc_cutoff, fc_cutoff), linetype = "dashed") +
+  coord_equal() +
+  annotate("text",
+           x = min(data_wide$Month_4, na.rm = TRUE),
+           y = max(data_wide$Month_6, na.rm = TRUE),
+           label = anno_text, hjust = 0, vjust = 1, size = 3.8) +
+  theme_minimal(base_size = 14) +
+  labs(x = "Month 4 log2FC", y = "Month 6 log2FC",
+       title = "4 vs 6 month log2 Fold Change — correlation & concordance")
+
+ggsave("correl_4_6m_plot.pdf",
+       plot = p1,
+       width = 10,
+       height = 8,
+       dpi = 300)
+```
+
+```{r}
+
+```
+
