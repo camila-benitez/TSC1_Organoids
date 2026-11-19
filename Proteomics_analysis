@@ -1,0 +1,1511 @@
+---
+title: "26Apr28_4and6_analysis"
+author: "C. Benitez"
+date: "2026-04-28"
+output: html_document
+---
+#Load libraries
+```{r}
+#Load libraries
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(tidyverse)
+```
+
+#Load in csv
+```{r}
+#setwd
+#Load data
+proteomics <- read.csv(file = "CB01_FourAndSixMonth_MutantVWT_groupComparison_wGenes_20260427.csv")
+```
+
+#clean up
+```{r}
+#remove NA Pvalues
+proteomics_clean <- proteomics[!is.na(proteomics$pvalue), ]
+
+#Remove duplicates by removing those with the library(dplyr)
+
+proteomics_clean <- proteomics_clean %>%
+  group_by(geneSym) %>%
+  slice_min(adj.pvalue, n = 1) %>%
+  ungroup()
+
+# Define thresholds 
+log2FC_cutoff <- 0.25
+padj_cutoff   <- 0.05
+
+# Add significance category
+#proteomics_clean <- proteomics_clean %>%
+  #mutate(significance = case_when(
+    #adj.pvalue < padj_cutoff & log2FC_cutoff >  fc_cutoff ~ "Up",
+    #adj.pvalue < padj_cutoff & log2FC_cutoff < -fc_cutoff ~ "Down",
+    #TRUE ~ "Not Significant"
+  #))
+
+```
+
+#protein labels of interest on Volcano plot
+```{r}
+#label proteins
+
+#synaptic genes
+presynaptic <- c("HIP1","SYT5", "BIN1", "AP3D1", "STX16", "LIN7A", "CASK", "SCAMP1", "SYNJ1", "SYNGR1", "SNAP91", "RAB3D", "APP", "SYP", "CLTA", "ATP6V1C1", "CALB2", "PTPRD","MT3", "PFN2","ATP6V1E1", "AMPH", "GSK3B", "AP3M2", "BACE1", "STX1B", "CDK5","ATP2B2", "DNM1","PTPRS", "AP3B2", "NECTIN1", "ATP6AP1", "STX1A", "SLC35F1","IQSEC1","RAB12","SV2A", "ERC1", "NLGN4X", "SYN2","RAB8B", "ATP6V0A1","AP2M1","RAB3C","SYT11","ROGDI", "RAB33B", "FXYD6", "DNAJC5", "ATP6V1H", "TBC1D24", "CADPS", "DNM3","GIT1","NPTN")   # replace with your list
+
+
+#Lysosomal proteases: (cathepsins A and G), aspartic proteases (cathepsins D and E), and cysteine proteases (cathepsins B, C, F, H, K, L, O, S, V, X/Z, and W)
+cathepsins <- c("CSTA", "CTSG", "CTSD", "CTSE", "CTSB", "CTSC", "CTSF", "CSTH", "CSTK", "CTSL", "CTSO", "CTSS", "CTSV", "CTSV", "CTSX", "CTSZ", "CTSW")
+
+#TSC related genes
+#TSC <- c("TSC1", "TSC2", "TBC1D7", "MAPT")
+
+#mTOR genes
+mTOR <- c("RPS6", "RPL7", "EIF4E", "EIF4G1", "4EBP1", "RPS6KB1", "FASN", "ACACA", "MYC", "SQSTM1")
+
+#FTD genes
+Neurodegeneration <- c("TARDBP", "SNCA", "ELAVL4", "MAPT")
+
+#interneuron markers
+interneuron <- c("PVALB", "CALB1", "CALB2", "NOS1", "TH", "CHAT", "SSTR2", "NPY", "GAD1", "GAD2","SCGN")
+
+#glutamatergic markers
+glutamatergic <- c("VGLUT1", "VGLUT2")
+```
+
+#Go term labels on plot
+```{r}
+#annotate dataset
+df_plot <- proteomics_clean %>%
+  mutate(
+    negLog10Padj = -log10(adj.pvalue),
+
+    significance = case_when(
+      adj.pvalue < padj_cutoff & log2FC >=  log2FC_cutoff ~ "Up",
+      adj.pvalue < padj_cutoff & log2FC <= -log2FC_cutoff ~ "Down",
+      TRUE ~ "NS"
+    ),
+
+    category = case_when(
+      geneSym %in% presynaptic   ~ "Presynaptic",
+      geneSym %in% cathepsins    ~ "Cathepsins",
+      geneSym %in% mTOR          ~ "mTOR",
+      geneSym %in% Neurodegeneration     ~ "Neurodegeneration",
+      geneSym %in% interneuron   ~ "Interneuron",
+      geneSym %in% glutamatergic ~ "Glutamatergic",
+      TRUE ~ "Other"))
+
+```
+
+#force some labels
+```{r}
+#select which to label
+forced_genes <- c("MAPT", "TARDBP")
+
+top_labels <- df_plot %>%
+  filter(category != "Other", significance != "NS") %>%
+  group_by(category) %>%
+  arrange(adj.pvalue, desc(abs(log2FC))) %>%
+  slice_head(n = 5) %>%
+  ungroup()
+
+forced_labels <- df_plot %>%
+  filter(geneSym %in% forced_genes)
+
+label_df <- bind_rows(top_labels, forced_labels) %>%
+  distinct(geneSym, .keep_all = TRUE)
+
+```
+
+#colors
+```{r}
+#Colors for labelling
+sig_colors <- c(
+  "Up"   = "#E64B35FF",
+  "Down" = "#4DBBD5FF",
+  "NS"   = "grey70"
+)
+
+category_colors <- c(
+  "Presynaptic"   = "#7E6148",
+  "Cathepsins"    = "#BC3C29",
+  "mTOR"          = "#20854E",
+  "Neurodegeneration" = "#7876B1",
+  "Interneuron"   = "#004C6D",   # DARKER BLUE / TEAL
+  "Glutamatergic" = "#FFDC91",
+  "Other"         = NA)
+```
+#volcano plot
+```{r}
+p1 <- ggplot(df_plot, aes(x = log2FC, y = negLog10Padj)) +
+
+  ## background points
+  geom_point(
+  aes(color = significance),
+  alpha = 0.7,
+  size = 1.5,
+  show.legend = FALSE
+) +
+
+  ## category overlay
+  geom_point(
+    data = df_plot %>% filter(category != "Other"),
+    aes(color = category),
+    size = 2.5
+  ) +
+
+  ## cutoff lines
+  geom_vline(xintercept = c(-log2FC_cutoff, log2FC_cutoff),
+             linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(padj_cutoff),
+             linetype = "dashed", color = "black") +
+
+  ## top gene labels
+  geom_text_repel(
+  data = label_df,
+  aes(label = geneSym, color = category),
+  size = 4,
+  fontface = "bold",
+  max.overlaps = Inf,
+  box.padding = 0.5,      # space around label
+  point.padding = 0.5,    # space around the dot
+  segment.color = "black",# color of the line connecting label to dot
+  segment.size = 0.5,     # thickness of the line
+  segment.alpha = 0.8,    # slightly transparent
+  arrow = arrow(length = unit(0.015, "npc")), # optional arrowhead
+  min.segment.length = 0, # draw line even for short distances
+  show.legend = FALSE
+) +
+
+  ## scales
+  scale_color_manual(
+  values = c(sig_colors, category_colors),
+  breaks = c("Presynaptic","Cathepsins","mTOR",
+             "Neurodegeneration","Interneuron","Glutamatergic"),
+  name = NULL) +
+
+  ## theme
+  theme_classic(base_size = 14) +
+  labs(
+    x = "log2 Fold Change",
+    y = "-log10 adjusted p-value",
+    title = "DA Proteins in TSC1 +/- v. TSC1 +/+")
+
+ggsave("volcano_plot.pdf", plot = p1, width = 8, height = 5, dpi = 600)
+```
+
+#volcano plot 2
+```{r}
+p2 <- ggplot(df_plot, aes(x = log2FC, y = negLog10Padj)) +
+
+  ## background points
+  geom_point(
+  aes(color = significance),
+  alpha = 0.7,
+  size = 1.5,
+  show.legend = FALSE
+) +
+
+  ## category overlay
+  geom_point(
+    data = df_plot %>% filter(category != "Other"),
+    aes(color = category),
+    size = 2.5
+  ) +
+
+  ## cutoff lines
+  geom_vline(xintercept = c(-log2FC_cutoff, log2FC_cutoff),
+             linetype = "dashed", color = "black") +
+  geom_hline(yintercept = -log10(padj_cutoff),
+             linetype = "dashed", color = "black") +
+
+  ## top gene labels
+  geom_text_repel(
+  data = label_df,
+  aes(label = geneSym, color = category),
+  size = 4,
+  fontface = "bold",
+  max.overlaps = Inf,
+  box.padding = 0.5,
+  point.padding = 0.5,
+  segment.color = "black",
+  segment.size = 0.5,
+  segment.alpha = 0.8,
+  arrow = arrow(length = unit(0.015, "npc")),
+  min.segment.length = 0,
+  show.legend = FALSE,
+
+  ## add semi-transparent white label background
+  bg.color = alpha("white", 0.7),
+  bg.r = 0.15
+) +
+
+  ## scales
+  scale_color_manual(
+  values = c(sig_colors, category_colors),
+  breaks = c("Presynaptic","Cathepsins","mTOR",
+             "Neurodegeneration","Interneuron","Glutamatergic"),
+  name = NULL
+) +
+
+  ## theme
+  theme_classic(base_size = 14) +
+  labs(
+    x = "log2 Fold Change",
+    y = "-log10 adjusted p-value",
+    title = "DA Proteins in TSC1 +/- v. TSC1 +/+"
+  )
+p2
+ggsave("volcano_plot.pdf", p2, width = 8, height = 5, dpi = 600)
+```
+
+
+# GO Analysis
+```{r}
+#Tidy Summary of data
+
+
+df_plot %>%
+  group_by(significance) %>%
+  summarise(count = n())
+
+
+```
+
+#GO analysis
+```{r}
+#GO analysis
+sig_up <- df_plot %>%
+  filter(significance == "Up") %>%
+  pull(geneSym) %>%
+  unique()
+
+sig_down <- df_plot %>%
+  filter(significance == "Down") %>%
+  pull(geneSym) %>%
+  unique()
+
+
+
+# optional: background (recommended)
+background <- df_plot %>%
+  pull(geneSym) %>%
+  unique()
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(dplyr)
+
+
+up_entrez <- bitr(sig_up,
+                  fromType = "SYMBOL",
+                  toType = "ENTREZID",
+                  OrgDb = org.Hs.eg.db)
+
+down_entrez <- bitr(sig_down,
+                    fromType = "SYMBOL",
+                    toType = "ENTREZID",
+                    OrgDb = org.Hs.eg.db)
+
+bg_entrez <- bitr(background,
+                  fromType = "SYMBOL",
+                  toType = "ENTREZID",
+                  OrgDb = org.Hs.eg.db)
+
+ego_up <- enrichGO(
+  gene = up_entrez$ENTREZID,
+  universe = bg_entrez$ENTREZID,   
+  OrgDb = org.Hs.eg.db,
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05,
+  readable = TRUE)
+
+ego_down <- enrichGO(
+  gene = down_entrez$ENTREZID,
+  universe = bg_entrez$ENTREZID,
+  OrgDb = org.Hs.eg.db,
+  ont = "BP",
+  pAdjustMethod = "BH",
+  readable = TRUE)
+
+#remove redundant terms
+ego_up <- simplify(ego_up, cutoff = 0.7)
+ego_down <- simplify(ego_down, cutoff = 0.7)
+
+bad_terms <- c(
+  "renal system development",
+  "connective tissue development",
+  "cartilage development",
+  "epithelial",
+  "muscle cell differentiation",
+  "muscle cell development",
+  "muscle",
+  "muscle organ development",
+  "heart morphogenesis",
+  "gland development",
+  "ear development",
+  "ossification",
+  "respiratory system development",
+  "erythrocyte differentiation",
+  "collagen fibril organization",
+  "hepatocyte apoptotic process",
+  "regulation of mesenchymal cell proliferation",
+  "skeletal",
+  "epidermis",
+  "erythrocyte",
+  "mesenchymal cell proliferation")
+
+pattern <- paste(bad_terms, collapse = "|")
+
+ego_down@result <- ego_down@result[
+  !grepl(pattern, ego_down@result$Description, ignore.case = TRUE),
+]
+
+
+up <- dotplot(ego_up, showCategory = 15) + ggtitle("Upregulated proteins TSC1 +/-") + 
+  theme_classic(base_size = 14)+ 
+  scale_size_area(max_size = 10)+
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(size = 12),
+    panel.grid.major = element_line(color = "grey85", size = 0.5),
+    panel.grid.minor = element_blank())
+
+down <- dotplot(ego_down, showCategory = 15) + ggtitle("Downregulated proteins TSC1 +/-") +
+   theme_classic(base_size = 14)+ 
+  scale_size_area(max_size = 10)+
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(size = 12),
+    panel.grid.major = element_line(color = "grey85", size = 0.5),
+    panel.grid.minor = element_blank())
+write.csv(ego_up, file = "april28_GO_up.csv")
+write.csv(ego_down, file = "april28_GO_down.csv")
+ggsave(up, file = "April28_GO_up_DP.pdf", height = 7, width =8)
+ggsave(down, file = "April28_GO_down_DP.pdf",height = 7, width =8)
+```
+#GO for all genes (not up or down seperated)
+```{r}
+sig_genes <- df_plot %>%
+  filter(significance != "NS") %>%
+  filter(!is.na(geneSym)) %>%
+  pull(geneSym) %>%
+  unique()
+
+bg_genes <- proteomics_clean %>%
+  filter(!is.na(geneSym)) %>%
+  pull(geneSym) %>%
+  unique()
+
+ego <- enrichGO(
+  gene          = sig_genes,
+  universe      = bg_genes,
+  OrgDb         = org.Hs.eg.db,
+  keyType       = "SYMBOL",
+  ont           = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE)
+#simplify redundant terms
+ego <- simplify(ego, cutoff = 0.7)
+
+#write.csv(ego, file = "global_GO_proteomics.csv")
+
+GO <- dotplot(ego, showCategory = 15) + ggtitle("GO Biological Processes in TSC1 +/-") + 
+  theme_classic(base_size = 14)+ 
+  scale_size_area(max_size = 10)+
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(size = 12),
+    panel.grid.major = element_line(color = "grey85", size = 0.5),
+    panel.grid.minor = element_blank())
+
+#ggsave(GO, file = "Global_GO_BP_dotplot.pdf", height = 7, width =8)
+```
+
+#compare to ASD gene sets
+```{r}
+#import SFARI ASD associated gene list
+sfari <- read.csv("SFARI-Gene_genes.csv")
+
+# keep high-confidence genes (recommended)
+sfari_genes <- sfari %>%
+  dplyr::filter(gene.score %in% c(1, 2, 3)) %>%   # 1–3 = strongest evidence
+  dplyr::pull(gene.symbol) %>%
+  unique()
+
+#define my gene list: all significant genes
+your_genes <- df_plot %>%
+  dplyr::filter(significance != "NS") %>%
+  dplyr::pull(geneSym) %>%
+  unique()
+
+# background = all measured genes with gene symbols
+background <- df_plot %>%
+  dplyr::filter(!is.na(geneSym)) %>%
+  dplyr::pull(geneSym) %>%
+  unique()
+
+# keep only SFARI genes that are actually present in the background
+sfari_genes <- intersect(sfari_genes, background)
+
+# overlap counts
+overlap <- length(intersect(your_genes, sfari_genes))
+your_only <- length(setdiff(your_genes, sfari_genes))
+sfari_only <- length(setdiff(sfari_genes, your_genes))
+neither <- length(setdiff(background, union(your_genes, sfari_genes)))
+
+# contingency table
+mat <- matrix(c(overlap, your_only,
+                sfari_only, neither),
+              nrow = 2,
+              byrow = TRUE)
+
+# Fisher's exact test
+fisher.test(mat)
+
+
+```
+
+#visualize ASD gene set enrichment
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(scales)
+
+plot_df <- df_plot %>%
+  mutate(
+    sfari_flag = if_else(geneSym %in% sfari_genes, "SFARI", "Other")
+  )
+
+# top 10 up and top 10 down for labels
+label_up <- plot_df %>%
+  filter(log2FC > 0) %>%
+  arrange(desc(negLog10Padj), desc(log2FC)) %>%
+  slice_head(n = 10)
+
+label_down <- plot_df %>%
+  filter(log2FC < 0) %>%
+  arrange(desc(negLog10Padj), log2FC) %>%
+  slice_head(n = 10)
+
+label_df <- bind_rows(label_up, label_down)
+
+or_txt <- paste0(
+  "SFARI enrichment: OR = ",
+  round(unname(ft$estimate), 2),
+  ", p = ",
+  signif(ft$p.value, 3)
+)
+
+p_volcano <- ggplot(plot_df, aes(x = log2FC, y = negLog10Padj)) +
+
+  # background first
+  geom_point(
+    data = plot_df %>% filter(sfari_flag == "Other"),
+    aes(color = sfari_flag),
+    alpha = 0.5,
+    size = 1.4
+  ) +
+
+  # SFARI last so it sits on top
+  geom_point(
+    data = plot_df %>% filter(sfari_flag == "SFARI"),
+    aes(color = sfari_flag),
+    alpha = 1,
+    size = 2.4
+  ) +
+
+  geom_vline(
+    xintercept = c(-log2FC_cutoff, log2FC_cutoff),
+    linetype = "dashed",
+    color = "grey45"
+  ) +
+  geom_hline(
+    yintercept = -log10(padj_cutoff),
+    linetype = "dashed",
+    color = "grey45"
+  ) +
+
+  geom_label_repel(
+    data = label_df,
+    aes(label = geneSym),
+    size = 3.5,
+    fontface = "bold",
+    fill = alpha("white", 0.85),
+    color = "black",
+    label.size = 0.2,
+    label.padding = unit(0.18, "lines"),
+    box.padding = 0.45,
+    point.padding = 0.25,
+    segment.color = "black",
+    segment.alpha = 0.8,
+    max.overlaps = Inf,
+    min.segment.length = 0,
+    show.legend = FALSE
+  ) +
+
+  scale_color_manual(values = c(
+    "Other" = "grey75",
+    "SFARI" = "red3"
+  )) +
+
+  labs(
+    title = "SFARI Gene set enrichment",
+    subtitle = or_txt,
+    x = "log2 Fold Change",
+    y = "-log10 adjusted p-value",
+    color = NULL
+  ) +
+
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+
+p_volcano 
+
+ggsave(p_volcano, file = "SFARI_GSEA_volPlot.pdf",width = 8, height = 5, dpi = 600)
+```
+
+
+```{r}
+
+library(tidyr)
+
+tab_df <- as.data.frame(mat)
+colnames(tab_df) <- c("SFARI", "Not_SFARI")
+tab_df$row <- c("Significant", "Not_significant")
+
+tab_long <- tab_df %>%
+  pivot_longer(cols = c(SFARI, Not_SFARI),
+               names_to = "category",
+               values_to = "count")
+
+p_table <- ggplot(tab_long, aes(x = category, y = row, fill = count)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = count), size = 6, fontface = "bold") +
+  scale_fill_gradient(low = "grey95", high = "steelblue") +
+  theme_classic(base_size = 14) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = "SFARI overlap with significant genes"
+  )
+
+p_table
+
+ft <- fisher.test(mat)
+
+or_df <- data.frame(
+  term = "SFARI enrichment",
+  OR = unname(ft$estimate),
+  low = ft$conf.int[1],
+  high = ft$conf.int[2]
+)
+
+p_or <- ggplot(or_df, aes(x = OR, y = term)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "grey50") +
+  geom_errorbarh(aes(xmin = low, xmax = high), height = 0.2, linewidth = 0.8) +
+  geom_point(size = 3.5) +
+  scale_x_log10() +
+  theme_classic(base_size = 14) +
+  labs(
+    x = "Odds ratio (log scale)",
+    y = NULL,
+    title = paste0("Fisher test: p = ", signif(ft$p.value, 3))
+  )
+
+p_or
+
+library(patchwork)
+
+final_fig <- p_volcano / (p_table | p_or) +
+  plot_layout(heights = c(2, 1))
+
+final_fig
+
+prop_df <- data.frame(
+  group = c("Significant", "Background"),
+  proportion = c(
+    251 / (251 + 2309),
+    308 / (308 + 3421)
+  )
+)
+
+ggplot(prop_df, aes(group, proportion)) +
+  geom_col(width = 0.6) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  theme_classic()
+```
+#GSEA of FTD GSEA Yield not significant and odds ratio of 0.57
+```{r}
+library(dplyr)
+library(clusterProfiler)
+
+# read the GMT file
+ftd <- read.gmt("/HP_FRONTOTEMPORAL_DEMENTIA.v2026.1.Hs.gmt")
+
+# inspect available gene set names
+unique(ftd$term) |> head(20)
+
+# pick the FTD-related set(s)
+# adjust the grep pattern to match the term names in your file
+ftd_genes <- ftd %>%
+  filter(grepl("HP_FRONTOTEMPORAL_DEMENTIA", term, ignore.case = TRUE)) %>%
+  pull(gene) %>%
+  unique()
+
+# your significant genes
+your_genes <- df_plot %>%
+  filter(significance != "NS") %>%
+  pull(geneSym) %>%
+  unique()
+
+# background = all measured genes with symbols
+background <- df_plot %>%
+  filter(!is.na(geneSym)) %>%
+  pull(geneSym) %>%
+  unique()
+
+# restrict FTD genes to those present in background
+ftd_genes <- intersect(ftd_genes, background)
+
+# contingency table counts
+overlap   <- length(intersect(your_genes, ftd_genes))
+your_only <- length(setdiff(your_genes, ftd_genes))
+ftd_only  <- length(setdiff(ftd_genes, your_genes))
+neither   <- length(setdiff(background, union(your_genes, ftd_genes)))
+
+mat <- matrix(
+  c(overlap, your_only,
+    ftd_only, neither),
+  nrow = 2,
+  byrow = TRUE,
+  dimnames = list(
+    your = c("sig", "not_sig"),
+    ftd  = c("in_ftd", "not_in_ftd")
+  )
+)
+
+fisher.test(mat)
+library(fgsea)
+
+ranks <- df_plot %>%
+  filter(!is.na(geneSym)) %>%
+  arrange(desc(log2FC)) %>%
+  distinct(geneSym, .keep_all = TRUE) %>%
+  dplyr::select(geneSym, log2FC) %>%
+  tibble::deframe()
+
+pathways <- list(FTD = ftd_genes)
+
+fgseaRes <- fgsea(
+  pathways = pathways,
+  stats = ranks,
+  minSize = 10,
+  maxSize = 500
+)
+
+fgseaRes
+```
+#Neurodegeneration GSEA
+```{r}
+# read the GMT file
+nd <- read.gmt("HP_NEURODEGENERATION.v2026.1.Hs.gmt")
+
+# inspect available gene set names
+unique(nd$term) |> head(20)
+
+# pick the FTD-related set(s)
+# adjust the grep pattern to match the term names in your file
+nd_genes <- nd %>%
+  filter(grepl("HP_NEURODEGENERATION", term, ignore.case = TRUE)) %>%
+  pull(gene) %>%
+  unique()
+
+# your significant genes
+your_genes <- df_plot %>%
+  filter(significance != "NS") %>%
+  pull(geneSym) %>%
+  unique()
+
+# background = all measured genes with symbols
+background <- df_plot %>%
+  filter(!is.na(geneSym)) %>%
+  pull(geneSym) %>%
+  unique()
+
+# restrict FTD genes to those present in background
+nd_genes <- intersect(nd_genes, background)
+
+# contingency table counts
+overlap   <- length(intersect(your_genes, nd_genes))
+your_only <- length(setdiff(your_genes, nd_genes))
+nd_only  <- length(setdiff(nd_genes, your_genes))
+neither   <- length(setdiff(background, union(your_genes, nd_genes)))
+
+mat <- matrix(
+  c(overlap, your_only,
+    nd_only, neither),
+  nrow = 2,
+  byrow = TRUE)
+
+fisher.test(mat)
+```
+#compare to ASD, FTD, and Neurodegenerative gene lists
+```{r}
+# disease_sets is a named list of gene vectors
+# Example:
+disease_sets <- list(
+Neurodegeneration = nd_genes,
+ASD = sfari_genes,
+FTD = ftd_genes)
+
+# make sure ranks are sorted decreasingly and named by gene symbol
+ranks <- sort(ranks, decreasing = TRUE)
+
+fgsea_results <- imap_dfr(disease_sets, \(genes, disease_name) {
+  fgsea(
+    pathways = setNames(list(genes), disease_name),
+    stats = ranks,
+    minSize = 10,
+    maxSize = 1000
+  ) %>%
+    mutate(disease = disease_name)
+})
+
+fgsea_results <- imap_dfr(disease_sets, \(genes, disease_name) {
+  fgsea(
+    pathways = setNames(list(unique(genes)), disease_name),
+    stats = ranks,
+    minSize = 10,
+    maxSize = 1000
+  ) %>%
+    as_tibble() %>%
+    mutate(disease = disease_name)})
+fgsea_results$leadingEdge <- sapply(
+  fgsea_results$leadingEdge,
+  paste,
+  collapse = ";"
+)
+
+write.csv(fgsea_results, "fgsea_results.csv", row.names = FALSE)
+
+
+fgsea_results %>%
+  ggplot(aes(x = reorder(disease, NES), y = NES, fill = padj < 0.05)) +
+  geom_col() +
+  coord_flip() +
+  theme_classic() +
+  labs(x = NULL, y = "NES")
+
+ggsave(file = "gsea_ASD_FTD_ND_plot.pdf", height = 6, width = 9)
+```
+#label these genes on a volcano plot
+```{r}
+# 1) Keep only genes present in dataset
+# -----------------------------
+asd_genes <- intersect(unique(sfari_genes), df_plot$geneSym)
+ftd_genes <- intersect(unique(ftd_genes), df_plot$geneSym)
+nd_genes  <- intersect(unique(nd_genes),  df_plot$geneSym)
+
+# -----------------------------
+# 2) Color ALL disease-set genes
+#    (including overlaps)
+# -----------------------------
+disease_points <- df_plot %>%
+  filter(geneSym %in% unique(c(asd_genes, ftd_genes, nd_genes))) %>%
+  mutate(
+    disease = case_when(
+      geneSym %in% asd_genes ~ "ASD",
+      geneSym %in% ftd_genes ~ "FTD",
+      geneSym %in% nd_genes  ~ "Neurodegeneration",
+      TRUE ~ NA_character_
+    )
+  )
+
+# -----------------------------
+# 3) Label top 5 changed genes per disease
+#    ranked by absolute log2FC, then adj.pvalue
+# -----------------------------
+label_df <- bind_rows(
+  df_plot %>%
+    filter(geneSym %in% asd_genes) %>%
+    arrange(desc(abs(log2FC)), adj.pvalue) %>%
+    slice_head(n = 5) %>%
+    mutate(disease = "ASD"),
+
+  df_plot %>%
+    filter(geneSym %in% ftd_genes) %>%
+    arrange(desc(abs(log2FC)), adj.pvalue) %>%
+    slice_head(n = 5) %>%
+    mutate(disease = "FTD"),
+
+  df_plot %>%
+    filter(geneSym %in% nd_genes) %>%
+    arrange(desc(abs(log2FC)), adj.pvalue) %>%
+    slice_head(n = 5) %>%
+    mutate(disease = "Neurodegeneration")
+) %>%
+  distinct(geneSym, .keep_all = TRUE)
+
+# -----------------------------
+# 4) Volcano plot
+# -----------------------------
+ggplot(df_plot, aes(x = log2FC, y = -log10(adj.pvalue))) +
+
+  geom_point(
+    color = "grey80",
+    alpha = 0.65,
+    size = 1.4
+  ) +
+
+  geom_point(
+    data = disease_points,
+    aes(color = disease),
+    alpha = 0.9,
+    size = 2.4
+  ) +
+
+  geom_label_repel(
+  data = label_df,
+  aes(label = geneSym, color = disease),
+  show.legend = FALSE,
+  size = 3.5,
+  fontface = "bold",
+  max.overlaps = Inf,
+  box.padding = 0.45,
+  point.padding = 0.3,
+  segment.alpha = 0.5,
+  fill = "white",
+  label.size = 0.2
+) +
+
+  geom_vline(
+    xintercept = c(-0.25, 0.25),
+    linetype = "dashed",
+    linewidth = 0.4,
+    color = "grey60"
+  ) +
+
+  geom_hline(
+    yintercept = -log10(0.05),
+    linetype = "dashed",
+    linewidth = 0.4,
+    color = "grey60"
+  ) +
+
+  scale_color_manual(values = c(
+    "ASD" = "#1f77b4",
+    "FTD" = "#d62728",
+    "Neurodegeneration" = "#2ca02c"
+  )) +
+
+  labs(
+    x = "log2 fold change",
+    y = "-log10 adjusted p-value",
+    color = NULL,
+    title = "Disease-associated proteins"
+  ) +
+
+  theme_classic(base_size = 14) +
+
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "right")
+
+ggsave(file = "GSEA_disease_volPlot.pdf", width = 8, height = 5, dpi = 600)
+```
+
+#ClusterProfiler to  check enrichment for ASD
+```{r}
+
+library(clusterProfiler)
+
+term2gene <- data.frame(
+  term = "ASD_SFARI",
+  gene = sfari_genes
+)
+
+asd_enrich <- enricher(
+  gene = sig_up,
+  TERM2GENE = term2gene,
+  universe = background,
+  minGSSize = 10,
+  maxGSSize = 1000   # or Inf
+)
+
+asd_enrich
+
+```
+```{r}
+#import SFARI ASD associated gene list
+tsc_df <- read.csv("tsc_proteins_full.csv")
+
+# keep high-confidence genes (recommended)
+tsc_genes <- tsc_df$Gene %>%
+  na.omit() %>%
+  unique()
+
+#define my gene list
+your_genes <- df_plot %>%
+  filter(significance == "Down") %>%
+  pull(geneSym) %>%
+  unique()
+
+background <- df_plot %>%
+  pull(geneSym) %>%
+  unique()
+
+overlap <- length(intersect(your_genes, tsc_genes))
+
+your_only <- length(setdiff(your_genes, tsc_genes))
+tsc_only <- length(setdiff(tsc_genes, your_genes))
+neither <- length(setdiff(background, union(your_genes, tsc_genes)))
+mat <- matrix(c(overlap, your_only,
+                tsc_only, neither),
+              nrow = 2)
+
+fisher.test(mat)
+```
+```{r}
+library(msigdbr)
+
+mtor_genes <- msigdbr(species = "Homo sapiens") %>%
+  filter(gs_name == "HALLMARK_MTORC1_SIGNALING") %>%
+  pull(gene_symbol)
+
+#define my gene list
+your_genes <- df_plot %>%
+  filter(significance != "NS") %>%
+  pull(geneSym) %>%
+  unique()
+
+background <- df_plot %>%
+  pull(geneSym) %>%
+  unique()
+
+overlap <- length(intersect(your_genes, tsc_genes))
+
+your_only <- length(setdiff(your_genes, tsc_genes))
+tsc_only <- length(setdiff(tsc_genes, your_genes))
+neither <- length(setdiff(background, union(your_genes, tsc_genes)))
+mat <- matrix(c(overlap, your_only,
+                tsc_only, neither),
+              nrow = 2)
+
+fisher.test(mat)
+```
+
+```{r}
+#load libraries
+library(fgsea)
+library(msigdbr)
+#rename the dataset to df
+df <- proteomics_clean
+
+df2 <- df %>%
+  filter(!is.na(log2FC), !is.na(pvalue), !is.na(geneSym)) %>%
+  group_by(geneSym) %>%
+  summarise(rank_metric = max(sign(log2FC) * -log10(pvalue))) %>%
+  ungroup()
+
+ranks <- df2$rank_metric
+names(ranks) <- df2$geneSym
+
+ranks <- sort(ranks, decreasing = TRUE)
+
+#Hallmark
+msig_h <- msigdbr(species = "Homo sapiens", category = "H")
+#Kegg + reactome
+msig_c2 <- msigdbr(species = "Homo sapiens", category = "C2")
+
+#mTOR/TSC-related
+mtor_sets <- msig_h %>%
+  filter(gs_name %in% c(
+    "HALLMARK_MTORC1_SIGNALING",
+    "HALLMARK_PI3K_AKT_MTOR_SIGNALING")) %>%
+  bind_rows(msig_c2 %>% filter(grepl("MTOR|PI3K|AKT|TRANSLATION|RIBOSOME", gs_name, ignore.case = TRUE)))
+
+#Neurodegeneration related
+neuro_sets <- msig_c2 %>%
+  filter(grepl("ALZHEIMER|PARKINSON|HUNTINGTON", gs_name, ignore.case = TRUE)) %>%
+  bind_rows(
+    msig_c2 %>% filter(grepl("MITOCHONDRIA|OXIDATIVE_PHOSPHORYLATION|PROTEASOME", gs_name, ignore.case = TRUE))
+  )
+#convert to list
+pathways_mtor <- split(mtor_sets$gene_symbol, mtor_sets$gs_name)
+pathways_neuro <- split(neuro_sets$gene_symbol, neuro_sets$gs_name)
+
+#run fgsea
+fgsea_mtor <- fgsea(
+  pathways = pathways_mtor,
+  stats = ranks)
+write.csv(fgsea_mtor, file = "fsgea_mtor.csv")
+
+fgsea_neuro <- fgsea(
+  pathways = pathways_neuro,
+  stats = ranks)
+write.csv(fgsea_mtor, file = "fsgea_neuro.csv")
+
+#results
+# arrange by significance
+fgsea_mtor %>% arrange(padj) %>% head()
+fgsea_neuro %>% arrange(padj) %>% head()
+
+plotEnrichment(pathways_mtor[["HALLMARK_MTORC1_SIGNALING"]], ranks)
+plotEnrichment(pathways_neuro[["WP_ALZHEIMERS_DISEASE"]], ranks)
+#
+```
+```{r}
+library(ggplot2)
+
+# combine results
+res_all <- bind_rows(
+  fgsea_mtor %>% mutate(category = "mTOR"),
+  fgsea_neuro %>% mutate(category = "Neuro")
+)
+
+# pick top pathways
+res_plot <- res_all %>%
+  filter(padj < 0.05) %>%
+  arrange(NES) %>%
+  slice_head(n = 15)
+
+ggplot(res_plot, aes(x = reorder(pathway, NES), y = NES, fill = category)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  labs(title = "GSEA Summary", x = "", y = "NES")
+
+ggplot(res_plot, aes(x = NES, y = reorder(pathway, NES))) +
+  geom_point(aes(size = -log10(padj), color = NES)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  theme_bw()
+res_all %>%
+  mutate(group = case_when(
+    grepl("MTOR|PI3K|AKT", pathway) ~ "Signaling",
+    grepl("RIBOSOME|TRANSLATION", pathway) ~ "Translation",
+    grepl("MITOCHON", pathway) ~ "Mitochondria",
+    TRUE ~ "Other"
+  )) %>%
+  group_by(group) %>%
+  summarise(mean_NES = mean(NES)) %>%
+  ggplot(aes(x = group, y = mean_NES, fill = group)) +
+  geom_col() +
+  theme_bw()
+```
+```{r}
+res_sig <- res_all %>% filter(padj < 0.05)
+
+top_up <- res_sig %>%
+  arrange(desc(NES)) %>%
+  slice_head(n = 10)
+
+top_down <- res_sig %>%
+  arrange(NES) %>%
+  slice_head(n = 10)
+
+res_plot <- bind_rows(top_up, top_down)
+
+ggplot(res_plot, aes(x = reorder(pathway, NES), y = NES, fill = NES)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_bw()
+```
+
+```{r}
+library(ggpubr)
+#load sequencing data
+seq <- read.csv(file = "/Users/camilabenitez/Library/CloudStorage/Box-Box/Kao_Lab/TSC1_Organoids/scRNAseq_TSC_analysis/SCT_HarmonyIntegration_analysis/Mar2026_Figures/DEG_HETvWT.csv")
+
+rna_df <- seq %>%
+  dplyr::select(geneSym = gene, logFC_rna = logFC, FDR)
+
+prot_df <- proteomics_clean %>%
+  dplyr::select(geneSym, logFC_prot = log2FC, pvalue)
+#merge
+merged_df <- inner_join(rna_df, prot_df, by = "geneSym")
+cor.test(merged_df$logFC_rna, merged_df$logFC_prot, method = "pearson")
+nrow(merged_df)
+#scatter plot
+scatter <- ggplot(merged_df, aes(x = logFC_rna, y = logFC_prot)) +
+  geom_point(alpha = 0.4, color = "grey") +
+  geom_point(
+    data = label_df,
+    color = "red",
+    size = 2
+  ) +
+  
+  geom_text_repel(
+    data = label_df,
+    aes(label = geneSym),
+    size = 4,
+    max.overlaps = 20
+  ) +
+  geom_smooth(method = "lm", color = "red") +
+  stat_cor(
+    method = "pearson",
+    aes(label = paste(after_stat(r.label), after_stat(p.label), sep = "~`,`~"))
+  ) +
+  theme_bw() +
+  labs(
+    x = "RNA-seq logFC",
+    y = "Proteomics log2FC",
+    title = "RNA vs Protein")
+
+scatter
+
+ggsave(scatter, file = "proteinVStranscript_scatter.pdf")
+
+merged_df <- merged_df %>%
+  mutate(sig_rna = FDR < 0.05)
+
+library(ggrepel)
+
+genes_to_label <- c("MAPT", "TSC1", "TARDBP", "SYN1", "SYT5")  # add whatever you want
+
+label_df <- merged_df %>%
+  filter(geneSym %in% genes_to_label) %>%
+  distinct(geneSym, .keep_all = TRUE)
+
+ggplot(merged_df, aes(x = logFC_rna, y = logFC_prot)) +
+  geom_point(alpha = 0.4, color = "grey") +
+  
+  geom_point(
+    data = label_df,
+    color = "red",
+    size = 2
+  ) +
+  
+  geom_text_repel(
+    data = label_df,
+    aes(label = geneSym),
+    size = 4,
+    max.overlaps = 20
+  ) +
+  
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  
+  theme_bw() +
+  labs(
+    x = "RNA logFC",
+    y = "Protein logFC",
+    title = "")
+ggsave (file = "RNAvProtein_scatter_keygenes_annotated.pdf")
+```
+#Protein up Transcript no change analysis
+```{r}
+post_tx_up <- merged_df %>%
+  dplyr::filter(
+    logFC_prot > 0.5,     # protein up
+    pvalue < 0.05,        # protein significant
+    logFC_rna <= 0        # RNA unchanged or down
+  )
+library(ggrepel)
+
+top_hits <- post_tx_up %>%
+  arrange(desc(logFC_prot)) %>%
+  slice_head(n = 10)
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+enrich <- enrichGO(
+  gene = post_tx_up$geneSym,
+  OrgDb = org.Hs.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP"
+)
+
+head(enrich)
+write.csv(enrich, file = "GO_upProtein_downRNA.csv")
+write.csv(post_tx_up, file = "proteinUP_rnaUnchanged.csv")
+
+
+prot_up <- dotplot(enrich, showCategory = 15) + ggtitle("Upregulated proteins/Downregulated RNA") + 
+  theme_classic(base_size = 14)+ 
+  scale_size_area(max_size = 10)+
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(size = 12),
+    panel.grid.major = element_line(color = "grey85", size = 0.5),
+    panel.grid.minor = element_blank())
+
+ggsave(prot_up,file = "proteinUP_transDOWN.pdf",height = 7, width =8)
+
+```
+#protein DOWN transcript Up
+```{r}
+post_tx_down <- merged_df %>%
+  dplyr::filter(
+    logFC_prot <= 0,   # protein unchanged or down
+    logFC_rna > 0      # RNA up
+  )
+
+library(ggrepel)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+top_hits_down <- post_tx_down %>%
+  arrange(desc(logFC_rna)) %>%
+  slice_head(n = 10)
+
+enrich_down <- enrichGO(
+  gene = post_tx_down$geneSym,
+  OrgDb = org.Hs.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP"
+)
+
+head(as.data.frame(enrich_down))
+
+write.csv(as.data.frame(enrich_down), file = "GO_downProtein_upRNA.csv", row.names = FALSE)
+write.csv(post_tx_down, file = "proteinDOWN_rnaUP.csv", row.names = FALSE)
+
+prot_down <- dotplot(enrich_down, showCategory = 15) +
+  ggtitle("Downregulated proteins / Upregulated RNA") +
+  theme_classic(base_size = 14) +
+  scale_size_area(max_size = 10) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(size = 12),
+    panel.grid.major = element_line(color = "grey85", linewidth = 0.5),
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(
+  filename = "proteinDOWN_rnaUP.pdf",
+  plot = prot_down,
+  height = 7,
+  width = 8.5
+)
+```
+
+#hierarchal clustering of the data (did not use)
+```{r}
+library(dplyr)
+library(tibble)
+library(pheatmap)
+
+library(dplyr)
+library(tibble)
+library(pheatmap)
+
+# RNA table
+rna_df <- seq %>%
+  dplyr::select(geneSym = gene, logFC_rna = logFC, FDR)
+
+# Protein table
+prot_df <- proteomics_clean %>%
+  dplyr::select(geneSym, logFC_prot = log2FC, pvalue)
+
+# Merge
+combined_df <- inner_join(rna_df, prot_df, by = "geneSym") %>%
+  dplyr::filter(!is.na(logFC_rna), !is.na(logFC_prot)) %>%
+  dplyr::distinct(geneSym, .keep_all = TRUE)
+
+# Keep only stronger changes
+filtered_df <- combined_df %>%
+  dplyr::filter(abs(logFC_rna) >= 0.5 | abs(logFC_prot) >= 0.5)
+
+# Create concordance category
+filtered_df <- filtered_df %>%
+  dplyr::mutate(
+    concordance = case_when(
+      logFC_rna > 0 & logFC_prot > 0 ~ "Up/Up",
+      logFC_rna < 0 & logFC_prot < 0 ~ "Down/Down",
+      logFC_rna > 0 & logFC_prot < 0 ~ "RNA Up / Prot Down",
+      logFC_rna < 0 & logFC_prot > 0 ~ "RNA Down / Prot Up",
+      TRUE ~ "Other"
+    )
+  )
+
+# Matrix for clustering
+mat <- filtered_df %>%
+  dplyr::select(geneSym, logFC_rna, logFC_prot) %>%
+  tibble::column_to_rownames("geneSym") %>%
+  as.matrix()
+
+# Scale rows so each gene is centered across RNA/protein
+mat_scaled <- t(scale(t(mat)))
+
+# Hierarchical clustering
+hc <- hclust(dist(mat_scaled), method = "ward.D2")
+
+# Force a chosen number of clusters
+k <- 4
+cluster_id <- cutree(hc, k = k)
+
+# Add cluster labels back to dataframe
+filtered_df$cluster <- cluster_id[filtered_df$geneSym]
+
+# Row annotation for heatmap
+anno_row <- filtered_df %>%
+  dplyr::select(geneSym, cluster, concordance) %>%
+  dplyr::distinct() %>%
+  tibble::column_to_rownames("geneSym")
+
+# Heatmap
+pheatmap(
+  mat_scaled,
+  color = colorRampPalette(c("blue", "white", "red"))(100),
+  cluster_rows = hc,
+  cluster_cols = TRUE,
+  clustering_method = "ward.D2",
+  show_rownames = FALSE,
+  annotation_row = anno_row,
+  cutree_rows = k,
+  main = "RNA vs protein hierarchical clustering"
+)
+
+```
+
+
+#compare to 5Y data (did not use)
+```{r}
+#compare to 5Y
+#sh <- read.csv ("5Y_protein_abundance.csv")
+
+#library(dplyr)
+#library(stringr)
+
+#sh <- sh %>%
+ # mutate(gene = str_split(Gene.entry, "_", simplify = TRUE)[,1])
+
+#library(dplyr)
+#library(tidyr)
+
+# ---- set your column names here ----
+org_fc  <- "log2FC"
+org_p   <- "adj.pvalue"
+sh_fc   <- "log2FC"
+sh_p    <- "adj.pvalue"
+
+# ---- rename to a common schema ----
+org <- proteomics_clean %>%
+  transmute(
+    gene = geneSym,
+    org_fc = .data[[org_fc]],
+    org_p  = .data[[org_p]]
+  )
+
+sh2 <- sh %>%
+  transmute(
+    gene = gene,
+    sh_fc = .data[[sh_fc]],
+    sh_p  = .data[[sh_p]]
+  )
+
+# ---- join ----
+cmp <- full_join(org, sh2, by = "gene") %>%
+  mutate(
+    org_sig = !is.na(org_p) & org_p < 0.05,
+    sh_sig  = !is.na(sh_p)  & sh_p  < 0.05,
+
+    org_dir = case_when(
+      is.na(org_fc) ~ NA_character_,
+      org_fc > 0 ~ "up",
+      org_fc < 0 ~ "down",
+      TRUE ~ "zero"
+    ),
+    sh_dir = case_when(
+      is.na(sh_fc) ~ NA_character_,
+      sh_fc > 0 ~ "up",
+      sh_fc < 0 ~ "down",
+      TRUE ~ "zero"
+    ),
+
+    quadrant = case_when(
+      org_sig & sh_sig & org_dir == sh_dir & org_dir %in% c("up", "down") ~ "both_same_direction",
+      org_sig & sh_sig & org_dir != sh_dir & org_dir %in% c("up", "down") & sh_dir %in% c("up", "down") ~ "both_opposite_direction",
+      org_sig & !sh_sig ~ "organoid_only",
+      !org_sig & sh_sig ~ "sh_only",
+      TRUE ~ "not_significant_or_missing"
+    )
+  )
+
+# ---- counts ----
+cmp %>%
+  count(quadrant, sort = TRUE)
+
+# ---- inspect each class ----
+both_same <- cmp %>% filter(quadrant == "both_same_direction")
+both_opp  <- cmp %>% filter(quadrant == "both_opposite_direction")
+org_only  <- cmp %>% filter(quadrant == "organoid_only")
+sh_only   <- cmp %>% filter(quadrant == "sh_only")
+
+head(both_same)
+
+library(ggplot2)
+
+ggplot(cmp, aes(x = org_fc, y = sh_fc, color = quadrant)) +
+  geom_point(alpha = 0.7) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_classic() +
+  labs(x = "Organoids log2FC", y = "SH-SY5Y log2FC")
+```
+
+```{r}
+library(dplyr)
+
+org_df <- proteomics_clean %>%
+  dplyr::select(
+    geneSym,
+    logFC_org = log2FC,
+    padj_org = adj.pvalue   # change if needed
+  )
+
+sh_df <- sh %>%
+  dplyr::select(
+    geneSym = gene,
+    logFC_sh = log2FC,
+    padj_sh = adj.pvalue    # change if needed
+  )
+
+merged_df <- inner_join(org_df, sh_df, by = "geneSym")
+
+nrow(merged_df)
+
+merged_df <- merged_df %>%
+  mutate(
+    org_sig = padj_org < 0.05,
+    sh_sig  = padj_sh  < 0.05,
+
+    quadrant = case_when(
+      org_sig & sh_sig & logFC_org > 0 & logFC_sh > 0 ~ "both_up",
+      org_sig & sh_sig & logFC_org < 0 & logFC_sh < 0 ~ "both_down",
+      org_sig & sh_sig & logFC_org * logFC_sh < 0     ~ "opposite",
+      org_sig & !sh_sig ~ "organoid_only",
+      !org_sig & sh_sig ~ "sh_only",
+      TRUE ~ "not_sig"
+    )
+  )
+
+library(ggplot2)
+
+ggplot(merged_df, aes(x = logFC_org, y = logFC_sh)) +
+  geom_point(aes(color = quadrant), alpha = 0.6) +
+  geom_smooth(method = "lm") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_bw() +
+  labs(
+    x = "Organoids log2FC",
+    y = "SH-SY5Y log2FC",
+    title = "Proteomics: Organoids vs SH-SY5Y"
+  )
+```
+
